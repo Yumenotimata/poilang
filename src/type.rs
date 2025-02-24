@@ -42,19 +42,46 @@ impl HasKind for Type {
 type Subst = HashMap<TyVar, Type>;
 
 pub trait Types {
-    fn apply(self, subst: &Subst) -> Self;
+    // fn apply(self, subst: &Subst) -> Self;
+    fn apply(&mut self, subst: &Subst);
 }
 
 impl Types for Type {
-    fn apply(mut self, subst: &Subst) -> Self {
-        match &mut self {
-            Type::Var(tyvar) => { 
-                subst
-                    .get(tyvar)
-                    .map(|u| self = u.clone()); 
+    fn apply(&mut self, subst: &Subst) {
+        match self {
+            Type::Var(tyvar) => match subst.get(tyvar) {
+                Some(u) => *self = u.clone(),
+                None => {},
             },
-            _ => todo!(),
+            Type::App(l, r) => {
+                l.apply(subst);
+                r.apply(subst);
+            },
+            _ => {},
         }
-        self
     }
+    // fn apply(mut self, subst: &Subst) -> Self {
+    //     fn apply_in_place(this: &mut Type, subst: &Subst) {
+    //         match this {
+    //             Type::Var(tyvar) => match subst.get(tyvar) {
+    //                 Some(u) => *this = u.clone(),
+    //                 None => {},
+    //             },
+    //             Type::App(l, r) => {
+    //                 apply_in_place(l, subst);
+    //                 apply_in_place(r, subst);
+    //             },
+    //             _ => {},
+    //         }
+    //     }
+
+    //     apply_in_place(&mut self, subst);
+        
+    //     self
+    // }
+}
+
+fn m2o<T, F: FnOnce(&mut T)>(mut this: T, f: F) -> T {
+    f(&mut this);
+    this
 }
