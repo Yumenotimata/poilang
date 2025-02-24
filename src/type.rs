@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Kind {
@@ -92,11 +92,28 @@ impl HasKind for Type {
 
 pub type Subst = HashMap<TyVar, Type>;
 
-pub fn compose(s1: Subst, s2: Subst) -> Subst {
-    let applyed_s2_by_s1: Subst = s2.into_iter().map(|(u, v) | (u, v.apply(&s1))).collect();
-    let mut s1 = s1.clone();
+pub fn compose(mut s1: Subst, s2: Subst) -> Subst {
+    let applyed_s2_by_s1: Subst = 
+        s2
+            .into_iter()
+            .map(|(u, v) | (u, v.apply(&s1)))
+            .collect();
     s1.extend(applyed_s2_by_s1);
     s1
+}
+
+pub fn merge(mut s1: Subst, s2: Subst) -> Result<Subst, TypeError> {
+    let s1_keys: HashSet<&TyVar> = s1.keys().collect();
+    let s2_keys: HashSet<&TyVar> = s2.keys().collect();
+    let s_intersection: HashSet<&TyVar> = s1_keys.intersection(&s2_keys).cloned().collect();
+    let conflicting: HashSet<TyVar> = s_intersection.into_iter().filter(|k| s1.get(k) != s2.get(k)).cloned().collect();
+
+    if conflicting.is_empty() {
+        s1.extend(s2);
+        Ok(s1)
+    } else {
+        Err(TypeError::MergeError(conflicting))
+    }
 }
 
 pub trait Types {
@@ -128,6 +145,7 @@ impl Types for Type {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeError {
     KindMismatch,
+    MergeError(HashSet<TyVar>),
 }
 
 pub fn mgu(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
@@ -155,11 +173,27 @@ pub fn mgu(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
         (t, Type::Var(v)) => mgu_var(v, t),
         (Type::Con(c1, _), Type::Con(c2, _)) if c1 == c2 => Ok(HashMap::new()),
         (Type::App(l1, r1), Type::App(l2, r2)) => {
-            let mut s1 = mgu(l1, l2)?;
+            let s1 = mgu(l1, l2)?;
             let r1 = r1.clone().apply(&s1);
             let r2 = r2.clone().apply(&s1);
             let s2 = mgu(&r1, &r2)?;
             Ok(compose(s2, s1))
+        },
+        _ => todo!(),
+    }
+}
+
+fn r#match(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
+    match (t1, t2) {
+        (Type::Var(v), t) => Ok(subst!(v.clone() => t.clone())),
+        (t, Type::Var(v)) => Ok(subst!(v.clone() => t.clone())),
+        (Type::Con(c1, _), Type::Con(c2, _)) if c1 == c2 => Ok(HashMap::new()),
+        (Type::App(l1, r1), Type::App(l2, r2)) => {
+            let s1 = r#match(l1, l2)?;
+            let r1 = r1.clone().apply(&s1);
+            let r2 = r2.clone().apply(&s1);
+            let s2 = r#match(&r1, &r2)?;
+            merge(s1, s2)
         },
         _ => todo!(),
     }
@@ -209,6 +243,36 @@ mod tests {
     }
 
     #[test]
+    fn test_merge() {
+        {
+            let s2 = subst! {
+                var!("a", Kind::Star) => tvar!("b", Kind::Star)
+            };
+            let s1 = subst! {
+                var!("b", Kind::Star) => tcon!("Int", Kind::Star)
+            };
+
+            let s = merge(s1, s2).unwrap();
+            
+            assert_eq!(s, subst! {
+                var!("a", Kind::Star) => tvar!("b", Kind::Star),
+                var!("b", Kind::Star) => tcon!("Int", Kind::Star)
+            });
+        }
+        {
+            let s2 = subst! {
+                var!("a", Kind::Star) => tvar!("Int", Kind::Star)
+            };
+            let s1 = subst! {
+                var!("a", Kind::Star) => tcon!("Bool", Kind::Star)
+            };
+
+            let e = merge(s1, s2).unwrap_err();
+            assert_eq!(e, TypeError::MergeError(HashSet::from_iter(vec![var!("a", Kind::Star)])));
+        }
+    }
+
+    #[test]
     fn test_mgu() {
         {
             let t1 = tapp!(tvar!("a", Kind::Star), tvar!("b", Kind::Star));
@@ -237,6 +301,40 @@ mod tests {
 
             assert_eq!(subst, subst! {
                 var!("a", Kind::Star) => tcon!("Bool", Kind::Star),
+                var!("b", Kind::Star) => tcon!("Bool", Kind::Star)
+            });
+        }
+    }
+
+    #[test]
+    fn test_match() {
+        {
+            let t1 = tapp!(tvar!("a", Kind::Star), tvar!("b", Kind::Star));
+            let t2 = tapp!(tcon!("Int", Kind::Star), tcon!("Bool", Kind::Star));
+            let subst = r#match(&t1, &t2).unwrap();
+
+            assert_eq!(subst, subst! {
+                var!("a", Kind::Star) => tcon!("Int", Kind::Star),
+                var!("b", Kind::Star) => tcon!("Bool", Kind::Star)
+            });
+        }
+        {
+            let t1 = tapp!(tvar!("a", Kind::Star), tvar!("b", Kind::Star));
+            let t2 = tapp!(tcon!("Int", Kind::Star), tvar!("a", Kind::Star));
+            let subst = r#match(&t1, &t2).unwrap();
+
+            assert_eq!(subst, subst! {
+                var!("a", Kind::Star) => tcon!("Int", Kind::Star),
+                var!("b", Kind::Star) => tcon!("Int", Kind::Star)
+            });
+        }
+        {
+            let t1 = tapp!(tvar!("a", Kind::Star), tvar!("b", Kind::Star));
+            let t2 = tapp!(tvar!("b", Kind::Star), tcon!("Bool", Kind::Star));
+            let subst = r#match(&t1, &t2).unwrap();
+
+            assert_eq!(subst, subst! {
+                var!("a", Kind::Star) => tvar!("b", Kind::Star),
                 var!("b", Kind::Star) => tcon!("Bool", Kind::Star)
             });
         }
