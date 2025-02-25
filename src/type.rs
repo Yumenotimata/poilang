@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Kind {
@@ -142,10 +143,14 @@ impl Types for Type {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Error)]
 pub enum TypeError {
+    #[error("Kind mismatch")]
     KindMismatch,
+    #[error("Merge error: {0:?}")]
     MergeError(HashSet<TyVar>),
+    #[error("Unify error")]
+    UnifyError,
 }
 
 pub fn mgu(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
@@ -179,7 +184,7 @@ pub fn mgu(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
             let s2 = mgu(&r1, &r2)?;
             Ok(compose(s2, s1))
         },
-        _ => todo!(),
+        _ => Err(TypeError::UnifyError),
     }
 }
 
